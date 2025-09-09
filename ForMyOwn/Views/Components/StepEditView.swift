@@ -59,7 +59,7 @@ struct StepEditView: View {
                     .cornerRadius(8)
             }
         }
-        .onChange(of: selectedItems) { _ in
+        .onChange(of: selectedItems) { _, _ in
             Task {
                 var newImagePaths: [String] = []
                 for item in selectedItems {
@@ -87,7 +87,7 @@ struct StepEditView: View {
 }
 
 #Preview {
-    @State var step = StepModel(description: "示例步骤", imagePaths: [])
+    @Previewable @State var step = StepModel(description: "示例步骤", imagePaths: [])
     return StepEditView(step: $step, recipeId: UUID())
 }
 

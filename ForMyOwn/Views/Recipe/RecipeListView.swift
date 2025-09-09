@@ -51,6 +51,7 @@ struct RecipeListView: View {
                 RecipeEditView()
             }
         }
+        
     }
     
     private func deleteRecipes(at offsets: IndexSet) {

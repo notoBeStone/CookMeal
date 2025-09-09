@@ -8,7 +8,15 @@
 import SwiftUI
 import PhotosUI
 
+// 步骤编辑状态
+enum StepEditMode: Equatable {
+    case none
+    case adding
+    case editing(Int)
+}
+
 struct RecipeEditView: View {
+    // MARK: - Properties
     @Environment(\.dismiss) private var dismiss
     @StateObject private var storageManager = StorageManager.shared
     
@@ -20,16 +28,102 @@ struct RecipeEditView: View {
     @State private var newIngredient: String = ""
     @State private var newSeasoning: String = ""
     
-    // 新步骤
+    
+    @State private var stepEditMode: StepEditMode = .none
     @State private var newStep = StepModel()
-    @State private var isAddingStep = false
     
     // 预定义的分类
     private let categories = RecipeCategory.defaultCategories.map { $0.name }
     
+    // MARK: - Initialization
     init(detail: RecipeDetail = RecipeDetail(), isEditing: Bool = false) {
         _editingDetail = State(initialValue: detail)
         self.isEditing = isEditing
+    }
+    
+    // MARK: - Private Methods
+    private func addIngredient() {
+        guard !newIngredient.isEmpty else { return }
+        editingDetail.ingredients.append(newIngredient)
+        newIngredient = ""
+    }
+    
+    private func removeIngredient(_ ingredient: String) {
+        editingDetail.ingredients.removeAll { $0 == ingredient }
+    }
+    
+    private func addSeasoning() {
+        guard !newSeasoning.isEmpty else { return }
+        editingDetail.seasonings.append(newSeasoning)
+        newSeasoning = ""
+    }
+    
+    private func removeSeasoning(_ seasoning: String) {
+        editingDetail.seasonings.removeAll { $0 == seasoning }
+    }
+    
+    private func addStep() {
+        guard !newStep.description.isEmpty else { return }
+        editingDetail.steps.append(newStep)
+        newStep = StepModel()
+    }
+    
+    private func updateStep() {
+        guard !newStep.description.isEmpty,
+              case let .editing(index) = stepEditMode else { return }
+        
+        // 如果图片路径发生变化，删除旧图片
+        let oldStep = editingDetail.steps[index]
+        let removedPaths = Set(oldStep.imagePaths).subtracting(Set(newStep.imagePaths))
+        for path in removedPaths {
+            ImageManager.shared.deleteImage(at: path)
+        }
+        
+        // 更新步骤
+        editingDetail.steps[index] = newStep
+        
+        // 重置状态
+        newStep = StepModel()
+    }
+    
+    private func removeStep(at index: Int) {
+        // 删除步骤相关的图片
+        for path in editingDetail.steps[index].imagePaths {
+            ImageManager.shared.deleteImage(at: path)
+        }
+        editingDetail.steps.remove(at: index)
+    }
+    
+    private func saveRecipe() {
+        // 如果有未添加的食材，添加到列表中
+        if !newIngredient.isEmpty {
+            editingDetail.ingredients.append(newIngredient)
+        }
+        
+        // 如果有未添加的调料，添加到列表中
+        if !newSeasoning.isEmpty {
+            editingDetail.seasonings.append(newSeasoning)
+        }
+        
+        // 更新时间
+        editingDetail.updateDate = Date()
+        
+        // 创建基本信息
+        let recipe = Recipe(
+            id: editingDetail.id,
+            name: editingDetail.name,
+            ingredients: editingDetail.ingredients,
+            category: editingDetail.category,
+            createDate: editingDetail.createDate
+        )
+        
+        if isEditing {
+            storageManager.updateRecipe(recipe, detail: editingDetail)
+        } else {
+            storageManager.addRecipe(recipe, detail: editingDetail)
+        }
+        
+        dismiss()
     }
     
     var body: some View {
@@ -93,43 +187,28 @@ struct RecipeEditView: View {
                 
                 // 步骤列表
                 Section(header: Text("步骤")) {
-                    ForEach(Array(editingDetail.steps.enumerated()), id: \.offset) { index, step in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .top) {
-                                Text("\(index + 1). ")
-                                    .foregroundColor(.secondary)
-                                Text(step.description)
-                            }
-                            
-                            // 显示步骤图片
-                            if !step.imagePaths.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {
-                                        ForEach(step.imagePaths.indices, id: \.self) { imageIndex in
-                                            if let image = ImageManager.shared.loadImage(from: step.imagePaths[imageIndex]) {
-                                                Image(uiImage: image)
-                                                    .resizable()
-                                                    .scaledToFill()
-                                                    .frame(width: 100, height: 100)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                            }
-                                        }
-                                    }
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(editingDetail.steps.enumerated()), id: \.offset) { index, step in
+                            StepItemView(
+                                step: step,
+                                index: index,
+                                onEdit: {
+                                    newStep = step
+                                    stepEditMode = .editing(index)
+                                },
+                                onDelete: {
+                                    removeStep(at: index)
                                 }
-                            }
+                            )
                         }
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                removeStep(at: index)
-                            } label: {
-                                Label("删除", systemImage: "trash")
-                            }
-                        }
-                    }
-                    
-                    // 添加步骤按钮
-                    Button(action: { isAddingStep = true }) {
+                        
+                        // 添加步骤按钮
                         Label("添加步骤", systemImage: "plus.circle.fill")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .onTapGesture {
+                                stepEditMode = .adding
+                            }
                     }
                 }
             }
@@ -148,89 +227,22 @@ struct RecipeEditView: View {
                     .disabled(editingDetail.name.isEmpty)
                 }
             }
-            .sheet(isPresented: $isAddingStep) {
-                NavigationStack {
-                    StepEditView(step: $newStep, recipeId: editingDetail.id)
-                        .padding()
-                        .navigationTitle("添加步骤")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("取消") {
-                                    newStep = StepModel()
-                                    isAddingStep = false
-                                }
-                            }
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("添加") {
-                                    addStep()
-                                    isAddingStep = false
-                                }
-                                .disabled(newStep.description.isEmpty)
-                            }
-                        }
-                }
-                .presentationDetents([.medium])
+            .sheet(isPresented: Binding(
+                get: { stepEditMode != .none },
+                set: { if !$0 { stepEditMode = .none } }
+            )) {
+                StepEditSheet(
+                    stepEditMode: $stepEditMode,
+                    newStep: $newStep,
+                    recipeId: editingDetail.id,
+                    onAdd: addStep,
+                    onUpdate: updateStep
+                )
             }
         }
     }
-    
-    private func addIngredient() {
-        guard !newIngredient.isEmpty else { return }
-        editingDetail.ingredients.append(newIngredient)
-        newIngredient = ""
-    }
-    
-    private func removeIngredient(_ ingredient: String) {
-        editingDetail.ingredients.removeAll { $0 == ingredient }
-    }
-    
-    private func addSeasoning() {
-        guard !newSeasoning.isEmpty else { return }
-        editingDetail.seasonings.append(newSeasoning)
-        newSeasoning = ""
-    }
-    
-    private func removeSeasoning(_ seasoning: String) {
-        editingDetail.seasonings.removeAll { $0 == seasoning }
-    }
-    
-    private func addStep() {
-        guard !newStep.description.isEmpty else { return }
-        editingDetail.steps.append(newStep)
-        newStep = StepModel()
-    }
-    
-    private func removeStep(at index: Int) {
-        // 删除步骤相关的图片
-        for path in editingDetail.steps[index].imagePaths {
-            ImageManager.shared.deleteImage(at: path)
-        }
-        editingDetail.steps.remove(at: index)
-    }
-    
-    private func saveRecipe() {
-        // 更新时间
-        editingDetail.updateDate = Date()
-        
-        // 创建基本信息
-        let recipe = Recipe(
-            id: editingDetail.id,
-            name: editingDetail.name,
-            ingredients: editingDetail.ingredients,
-            category: editingDetail.category,
-            createDate: editingDetail.createDate
-        )
-        
-        if isEditing {
-            storageManager.updateRecipe(recipe, detail: editingDetail)
-        } else {
-            storageManager.addRecipe(recipe, detail: editingDetail)
-        }
-        
-        dismiss()
-    }
 }
+
 
 #Preview {
     RecipeEditView()
